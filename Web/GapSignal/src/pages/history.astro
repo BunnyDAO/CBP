@@ -1,0 +1,9 @@
+---
+import Layout from "../layouts/Layout.astro";
+import HistoryChart from "../components/HistoryChart";
+---
+
+<Layout title="History" active="history">
+  <h2 class="text-xl font-semibold text-white mb-5">Signal History</h2>
+  <HistoryChart client:load />
+</Layout>

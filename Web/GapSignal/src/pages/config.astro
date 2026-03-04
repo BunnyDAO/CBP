@@ -1,0 +1,13 @@
+---
+import Layout from "../layouts/Layout.astro";
+import ConfigForm from "../components/ConfigForm";
+import UpdateButton from "../components/UpdateButton";
+---
+
+<Layout title="Configuration" active="config">
+  <h2 class="text-xl font-semibold text-white mb-5">Configuration</h2>
+  <div class="space-y-6">
+    <UpdateButton client:load />
+    <ConfigForm client:load />
+  </div>
+</Layout>
