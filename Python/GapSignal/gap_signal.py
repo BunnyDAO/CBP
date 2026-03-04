@@ -337,3 +337,25 @@ def append_signal_history(history_path: str, entry: dict):
     else:
         df_combined = df_new
     df_combined.to_csv(history_path, index=False)
+
+
+def append_signal_change(path: str, entry: dict):
+    """Append a signal transition entry to signal_changes.json."""
+    changes = load_signal_changes(path)
+    changes.append(entry)
+    with open(path, "w") as f:
+        json.dump(changes, f, indent=2)
+
+
+def load_signal_changes(path: str, limit: int = 0) -> list[dict]:
+    """Load signal change log from JSON. Returns most recent `limit` entries (0 = all)."""
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r") as f:
+            changes = json.load(f)
+        if limit > 0:
+            changes = changes[-limit:]
+        return changes
+    except Exception:
+        return []

@@ -1,4 +1,4 @@
-import { type SignalData } from "../lib/api";
+import { type SignalData, type PriceData } from "../lib/api";
 
 const signalColors: Record<string, { bg: string; text: string; border: string }> = {
   "STRONG LONG": { bg: "bg-green-500/20", text: "text-green-400", border: "border-green-500/40" },
@@ -8,8 +8,16 @@ const signalColors: Record<string, { bg: string; text: string; border: string }>
   "STRONG SHORT": { bg: "bg-red-500/20", text: "text-red-400", border: "border-red-500/40" },
 };
 
-export default function SignalBadge({ data }: { data: SignalData }) {
+interface Props {
+  data: SignalData;
+  livePrice?: PriceData | null;
+}
+
+export default function SignalBadge({ data, livePrice }: Props) {
   const colors = signalColors[data.signal] ?? signalColors.NEUTRAL;
+
+  const displayPrice = livePrice?.price ?? data.price;
+  const isLive = livePrice?.source === "websocket";
 
   return (
     <div className={`rounded-xl border ${colors.border} ${colors.bg} p-6`}>
@@ -19,8 +27,21 @@ export default function SignalBadge({ data }: { data: SignalData }) {
           <p className={`text-4xl font-bold mt-1 ${colors.text}`}>{data.signal}</p>
         </div>
         <div className="text-right">
-          <p className="text-2xl font-mono text-white">${data.price.toLocaleString()}</p>
-          <p className="text-xs text-gray-500 mt-1">as of {data.price_date}</p>
+          <div className="flex items-center justify-end gap-2">
+            <p className="text-2xl font-mono text-white">${displayPrice.toLocaleString()}</p>
+            <span
+              className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                isLive
+                  ? "bg-green-500/20 text-green-400 animate-pulse"
+                  : "bg-yellow-500/20 text-yellow-400"
+              }`}
+            >
+              {isLive ? "LIVE" : "DELAYED"}
+            </span>
+          </div>
+          <p className="text-xs text-gray-500 mt-1">
+            {isLive ? `WS ${new Date(livePrice!.timestamp).toLocaleTimeString()}` : `as of ${data.price_date}`}
+          </p>
         </div>
       </div>
       <div className="grid grid-cols-3 gap-4 mt-4 pt-4 border-t border-gray-800">

@@ -29,5 +29,9 @@
     "../../Data/SOLUSDT-BINANCE/Instances/Xv1/Processed/SubSet"
   ],
   "candles_path": "../../Data/SOLUSDT-BINANCE/Candles/SOLUSDT_binance_1D.csv",
-  "data_root": "../../Data/SOLUSDT-BINANCE"
+  "data_root": "../../Data/SOLUSDT-BINANCE",
+  "webhook_url": "",
+  "webhook_enabled": false,
+  "pipeline_schedule_hours": 6,
+  "scheduler_enabled": true
 }

@@ -1,4 +1,4 @@
-const API_BASE = "http://localhost:8000";
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
 export interface SignalData {
   date: string;
@@ -90,6 +90,10 @@ export interface Config {
   instance_folders: string[];
   candles_path: string;
   data_root: string;
+  webhook_url: string;
+  webhook_enabled: boolean;
+  pipeline_schedule_hours: number;
+  scheduler_enabled: boolean;
 }
 
 export interface PipelineStatus {
@@ -100,6 +104,29 @@ export interface PipelineStatus {
   error: string | null;
   started_at: string | null;
   finished_at: string | null;
+}
+
+export interface SignalChange {
+  timestamp: string;
+  previous_signal: string;
+  previous_strength: number;
+  signal: string;
+  signal_strength: number;
+  long_ratio: number;
+  price: number;
+}
+
+export interface PriceData {
+  price: number;
+  source: "websocket" | "csv";
+  timestamp: string;
+}
+
+export interface SchedulerStatus {
+  enabled: boolean;
+  interval_hours: number;
+  running: boolean;
+  next_run: string | null;
 }
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
@@ -137,4 +164,21 @@ export const api = {
     }),
 
   getUpdateStatus: () => fetchJson<PipelineStatus>("/api/update/status"),
+
+  getSignalChanges: (limit = 50) =>
+    fetchJson<{ changes: SignalChange[] }>(`/api/signal/changes?limit=${limit}`),
+
+  getPrice: () => fetchJson<PriceData>("/api/price"),
+
+  getScheduler: () => fetchJson<SchedulerStatus>("/api/scheduler"),
+
+  updateScheduler: (params: { enabled?: boolean; interval_hours?: number }) => {
+    const q = new URLSearchParams();
+    if (params.enabled !== undefined) q.set("enabled", String(params.enabled));
+    if (params.interval_hours !== undefined) q.set("interval_hours", String(params.interval_hours));
+    return fetchJson<SchedulerStatus>(`/api/scheduler?${q.toString()}`, { method: "POST" });
+  },
+
+  testWebhook: () =>
+    fetchJson<{ status: string; http_status: number }>("/api/webhook/test", { method: "POST" }),
 };

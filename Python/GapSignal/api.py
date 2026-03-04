@@ -2,15 +2,20 @@
 Gap Signal API — FastAPI server for the Gap Imbalance Dashboard.
 
 Endpoints:
-  GET  /api/signal         — Full signal data (dashboard)
-  GET  /api/signal/simple  — Lightweight signal for external apps
-  GET  /api/health         — Health check
-  GET  /api/targets        — Unfilled targets with optional filters
-  GET  /api/history        — Signal history from CSV
-  GET  /api/config         — Current config
-  POST /api/config         — Update and persist config
-  POST /api/update         — Trigger data pipeline (async)
-  GET  /api/update/status  — Check pipeline progress
+  GET  /api/signal          — Full signal data (dashboard)
+  GET  /api/signal/simple   — Lightweight signal for external apps
+  GET  /api/signal/changes  — Signal transition change log
+  GET  /api/health          — Health check
+  GET  /api/targets         — Unfilled targets with optional filters
+  GET  /api/history         — Signal history from CSV
+  GET  /api/config          — Current config
+  POST /api/config          — Update and persist config
+  POST /api/update          — Trigger data pipeline (async)
+  GET  /api/update/status   — Check pipeline progress
+  POST /api/webhook/test    — Fire test webhook payload
+  GET  /api/scheduler       — Scheduler status + next run
+  POST /api/scheduler       — Update scheduler settings
+  GET  /api/price           — Live price (WebSocket or CSV fallback)
 
 Auth:
   Set API_KEY env var to require `X-API-Key` header on all requests.
@@ -44,6 +49,7 @@ app.add_middleware(
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 HISTORY_PATH = os.path.join(BASE_DIR, "signal_history.csv")
+CHANGES_PATH = os.path.join(BASE_DIR, "signal_changes.json")
 PROCESSING_DIR = os.path.join(BASE_DIR, "..", "Processing")
 
 # Auth — set API_KEY env var to enable
@@ -53,6 +59,10 @@ API_KEY = os.environ.get("API_KEY")
 _signal_cache: dict = {}
 _cache_ts: float = 0
 CACHE_TTL = 300  # 5 minutes
+
+# Live price (populated by WebSocket thread, used by _compute_signal)
+_live_price: Optional[float] = None
+_live_price_ts: float = 0
 
 # Pipeline state
 pipeline_state = {
@@ -109,7 +119,13 @@ def _compute_signal() -> dict:
         base_dir=BASE_DIR,
     )
 
-    price, price_date = gs.get_current_price(config["candles_path"], base_dir=BASE_DIR)
+    # Use live WebSocket price if fresh (< 60s), else CSV
+    now_ts = time.time()
+    if _live_price is not None and (now_ts - _live_price_ts) < 60:
+        price = round(_live_price, 4)
+        price_date = datetime.fromtimestamp(_live_price_ts).strftime("%Y-%m-%d")
+    else:
+        price, price_date = gs.get_current_price(config["candles_path"], base_dir=BASE_DIR)
 
     imbalance = gs.compute_gap_imbalance(instances, price)
     signal, strength = gs.generate_signal(imbalance["long_ratio"], config["thresholds"])
@@ -137,6 +153,21 @@ def _compute_signal() -> dict:
         "signal": signal,
         "signal_strength": strength,
     })
+
+    # Detect signal change
+    prev_strength = _signal_cache.get("signal_strength") if _signal_cache else None
+    if prev_strength is not None and prev_strength != strength:
+        change_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "previous_signal": _signal_cache["signal"],
+            "previous_strength": prev_strength,
+            "signal": signal,
+            "signal_strength": strength,
+            "long_ratio": imbalance["long_ratio"],
+            "price": price,
+        }
+        gs.append_signal_change(CHANGES_PATH, change_entry)
+        _fire_webhook(change_entry)
 
     _signal_cache = {
         "date": today,
@@ -189,6 +220,66 @@ def get_signal_simple():
         "short_below": full["short_below"],
         "date": full["date"],
     }
+
+
+# ─── Signal Changes Endpoint ─────────────────────────────────────────────────
+
+@app.get("/api/signal/changes", dependencies=[Depends(verify_api_key)])
+def get_signal_changes(limit: int = Query(50, description="Max entries to return")):
+    """Recent signal transitions."""
+    return {"changes": gs.load_signal_changes(CHANGES_PATH, limit=limit)}
+
+
+# ─── Webhook ────────────────────────────────────────────────────────────────
+
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
+
+
+def _fire_webhook(change_entry: dict):
+    """POST signal change to webhook URL if enabled."""
+    config = load_config()
+    url = WEBHOOK_URL or config.get("webhook_url", "")
+    enabled = bool(WEBHOOK_URL) or config.get("webhook_enabled", False)
+    if not url or not enabled:
+        return
+    payload = {
+        "event": "signal_change",
+        "previous_signal": change_entry.get("previous_signal"),
+        "signal": change_entry["signal"],
+        "signal_strength": change_entry["signal_strength"],
+        "long_ratio": change_entry["long_ratio"],
+        "price": change_entry["price"],
+        "timestamp": change_entry["timestamp"],
+    }
+    try:
+        import requests as req
+        req.post(url, json=payload, timeout=10)
+    except Exception:
+        pass
+
+
+@app.post("/api/webhook/test", dependencies=[Depends(verify_api_key)])
+def test_webhook():
+    """Fire a test webhook payload."""
+    config = load_config()
+    url = WEBHOOK_URL or config.get("webhook_url", "")
+    if not url:
+        raise HTTPException(status_code=400, detail="No webhook URL configured")
+    payload = {
+        "event": "test",
+        "previous_signal": "NEUTRAL",
+        "signal": "LEAN LONG",
+        "signal_strength": 1,
+        "long_ratio": 0.65,
+        "price": 150.0,
+        "timestamp": datetime.now().isoformat(),
+    }
+    try:
+        import requests as req
+        resp = req.post(url, json=payload, timeout=10)
+        return {"status": "sent", "http_status": resp.status_code}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 # ─── Targets Endpoint ────────────────────────────────────────────────────────
@@ -268,6 +359,10 @@ class ConfigUpdate(BaseModel):
     instance_folders: Optional[list[str]] = None
     candles_path: Optional[str] = None
     data_root: Optional[str] = None
+    webhook_url: Optional[str] = None
+    webhook_enabled: Optional[bool] = None
+    pipeline_schedule_hours: Optional[int] = None
+    scheduler_enabled: Optional[bool] = None
 
 
 @app.get("/api/config", dependencies=[Depends(verify_api_key)])
@@ -381,6 +476,165 @@ def trigger_update():
 @app.get("/api/update/status", dependencies=[Depends(verify_api_key)])
 def update_status():
     return pipeline_state
+
+
+# ─── Scheduled Pipeline Refresh ─────────────────────────────────────────────
+
+_scheduler = None
+
+
+def _scheduled_pipeline_run():
+    """Run pipeline on schedule, then invalidate signal cache."""
+    global _signal_cache, _cache_ts
+    if pipeline_state["running"]:
+        return
+    pipeline_state.update({
+        "running": True,
+        "progress": 0,
+        "step": "Starting (scheduled)...",
+        "log": [],
+        "error": None,
+        "started_at": datetime.now().isoformat(),
+        "finished_at": None,
+    })
+    run_pipeline()
+    # Invalidate cache so next signal request recomputes (triggers change detection)
+    _signal_cache = {}
+    _cache_ts = 0
+
+
+def _start_scheduler():
+    """Start or restart the APScheduler BackgroundScheduler."""
+    global _scheduler
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+    except ImportError:
+        return
+
+    config = load_config()
+    if not config.get("scheduler_enabled", True):
+        return
+
+    hours = config.get("pipeline_schedule_hours", 6)
+
+    if _scheduler is not None:
+        try:
+            _scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+
+    _scheduler = BackgroundScheduler()
+    _scheduler.add_job(
+        _scheduled_pipeline_run,
+        "interval",
+        hours=hours,
+        id="pipeline_refresh",
+        replace_existing=True,
+    )
+    _scheduler.start()
+
+
+@app.on_event("startup")
+def on_startup():
+    _start_scheduler()
+    _start_live_price()
+
+
+@app.get("/api/scheduler", dependencies=[Depends(verify_api_key)])
+def get_scheduler_status():
+    """Scheduler status and next run time."""
+    config = load_config()
+    next_run = None
+    if _scheduler and _scheduler.running:
+        job = _scheduler.get_job("pipeline_refresh")
+        if job and job.next_run_time:
+            next_run = job.next_run_time.isoformat()
+    return {
+        "enabled": config.get("scheduler_enabled", True),
+        "interval_hours": config.get("pipeline_schedule_hours", 6),
+        "running": _scheduler is not None and _scheduler.running,
+        "next_run": next_run,
+    }
+
+
+@app.post("/api/scheduler", dependencies=[Depends(verify_api_key)])
+def update_scheduler(enabled: Optional[bool] = None, interval_hours: Optional[int] = None):
+    """Update scheduler settings and restart."""
+    config = load_config()
+    if enabled is not None:
+        config["scheduler_enabled"] = enabled
+    if interval_hours is not None and interval_hours >= 1:
+        config["pipeline_schedule_hours"] = interval_hours
+    save_config(config)
+
+    if config.get("scheduler_enabled", True):
+        _start_scheduler()
+    elif _scheduler:
+        try:
+            _scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+
+    return get_scheduler_status()
+
+
+# ─── Live Binance Price via WebSocket ───────────────────────────────────────
+
+_ws_thread: Optional[threading.Thread] = None
+
+
+def _binance_ws_loop():
+    """Connect to Binance WebSocket for live SOL/USDT price with auto-reconnect."""
+    global _live_price, _live_price_ts
+    import importlib
+    backoff = 1
+
+    while True:
+        try:
+            ws_mod = importlib.import_module("websockets.sync.client")
+            with ws_mod.connect("wss://stream.binance.com:9443/ws/solusdt@trade") as ws:
+                backoff = 1  # reset on successful connect
+                while True:
+                    msg = ws.recv()
+                    data = json.loads(msg)
+                    _live_price = float(data["p"])
+                    _live_price_ts = time.time()
+        except Exception:
+            time.sleep(min(backoff, 60))
+            backoff *= 2
+
+
+def _start_live_price():
+    """Start live price WebSocket thread."""
+    global _ws_thread
+    try:
+        import websockets  # noqa: F401
+    except ImportError:
+        return
+    if _ws_thread is not None and _ws_thread.is_alive():
+        return
+    _ws_thread = threading.Thread(target=_binance_ws_loop, daemon=True)
+    _ws_thread.start()
+
+
+@app.get("/api/price", dependencies=[Depends(verify_api_key)])
+def get_price():
+    """Live price — WebSocket if fresh (< 60s), else CSV fallback."""
+    now = time.time()
+    if _live_price is not None and (now - _live_price_ts) < 60:
+        return {
+            "price": round(_live_price, 4),
+            "source": "websocket",
+            "timestamp": datetime.fromtimestamp(_live_price_ts).isoformat(),
+        }
+    # CSV fallback
+    config = load_config()
+    price, price_date = gs.get_current_price(config["candles_path"], base_dir=BASE_DIR)
+    return {
+        "price": price,
+        "source": "csv",
+        "timestamp": price_date,
+    }
 
 
 if __name__ == "__main__":

@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
-import { api, type SignalData } from "../lib/api";
+import { useState, useEffect, useRef } from "react";
+import { api, type SignalData, type PriceData } from "../lib/api";
 import SignalBadge from "./SignalBadge";
 import RecommendationCard from "./RecommendationCard";
 import RatioTrendChart from "./RatioTrendChart";
 import GapBarChart from "./GapBarChart";
+import SignalChangeLog from "./SignalChangeLog";
 
 const DEFAULT_THRESHOLDS = {
   strong_long: 0.8,
@@ -17,6 +18,8 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [thresholds, setThresholds] = useState(DEFAULT_THRESHOLDS);
+  const [livePrice, setLivePrice] = useState<PriceData | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     Promise.all([api.getSignal(), api.getConfig()])
@@ -29,6 +32,14 @@ export default function Dashboard() {
         setError(err.message);
         setLoading(false);
       });
+
+    // Poll live price every 5s
+    const fetchPrice = () => api.getPrice().then(setLivePrice).catch(() => {});
+    fetchPrice();
+    intervalRef.current = setInterval(fetchPrice, 5000);
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
   }, []);
 
   if (loading) {
@@ -62,13 +73,15 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <SignalBadge data={data} />
+        <SignalBadge data={data} livePrice={livePrice} />
         <RecommendationCard rec={data.recommendation} />
       </div>
 
       <RatioTrendChart trend={data.trend} thresholds={thresholds} />
 
       <GapBarChart distribution={data.gap_distribution} currentPrice={data.price} />
+
+      <SignalChangeLog />
     </div>
   );
 }

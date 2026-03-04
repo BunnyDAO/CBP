@@ -1,17 +1,28 @@
 import { useState, useEffect } from "react";
-import { api, type Config } from "../lib/api";
+import { api, type Config, type SchedulerStatus } from "../lib/api";
 
 export default function ConfigForm() {
   const [config, setConfig] = useState<Config | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [webhookTesting, setWebhookTesting] = useState(false);
+  const [webhookResult, setWebhookResult] = useState<string | null>(null);
+  const [scheduler, setScheduler] = useState<SchedulerStatus | null>(null);
 
   useEffect(() => {
-    api.getConfig().then((c) => {
-      setConfig(c);
-      setLoading(false);
-    });
+    Promise.all([api.getConfig(), api.getScheduler()])
+      .then(([c, s]) => {
+        setConfig(c);
+        setScheduler(s);
+        setLoading(false);
+      })
+      .catch(() => {
+        api.getConfig().then((c) => {
+          setConfig(c);
+          setLoading(false);
+        });
+      });
   }, []);
 
   const save = async () => {
@@ -185,6 +196,95 @@ export default function ConfigForm() {
               />
             </label>
           ))}
+        </div>
+      </section>
+
+      {/* Webhook */}
+      <section className="rounded-xl border border-gray-800 bg-gray-900/50 p-5">
+        <h3 className="text-sm font-medium text-gray-400 mb-4">Webhook Notifications</h3>
+        <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={config.webhook_enabled}
+                onChange={(e) => setConfig({ ...config, webhook_enabled: e.target.checked })}
+                className="w-4 h-4 rounded border-gray-600 bg-gray-800"
+              />
+              <span className="text-xs text-gray-400">Enable webhook</span>
+            </label>
+          </div>
+          <label className="block">
+            <span className="text-xs text-gray-500">Webhook URL</span>
+            <input
+              type="url"
+              placeholder="https://example.com/webhook"
+              className="mt-1 block w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm font-mono"
+              value={config.webhook_url}
+              onChange={(e) => setConfig({ ...config, webhook_url: e.target.value })}
+            />
+          </label>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={async () => {
+                setWebhookTesting(true);
+                setWebhookResult(null);
+                try {
+                  const res = await api.testWebhook();
+                  setWebhookResult(`Sent (HTTP ${res.http_status})`);
+                } catch (e: unknown) {
+                  setWebhookResult(`Failed: ${e instanceof Error ? e.message : "unknown error"}`);
+                }
+                setWebhookTesting(false);
+              }}
+              disabled={webhookTesting || !config.webhook_url}
+              className="px-4 py-1.5 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-xs font-medium disabled:opacity-50 transition-colors"
+            >
+              {webhookTesting ? "Sending..." : "Test Webhook"}
+            </button>
+            {webhookResult && (
+              <span className={`text-xs ${webhookResult.startsWith("Sent") ? "text-green-400" : "text-red-400"}`}>
+                {webhookResult}
+              </span>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* Scheduler */}
+      <section className="rounded-xl border border-gray-800 bg-gray-900/50 p-5">
+        <h3 className="text-sm font-medium text-gray-400 mb-4">Pipeline Scheduler</h3>
+        <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={config.scheduler_enabled}
+                onChange={(e) => setConfig({ ...config, scheduler_enabled: e.target.checked })}
+                className="w-4 h-4 rounded border-gray-600 bg-gray-800"
+              />
+              <span className="text-xs text-gray-400">Enable scheduled refresh</span>
+            </label>
+          </div>
+          <label className="block">
+            <span className="text-xs text-gray-500">Interval (hours)</span>
+            <input
+              type="number"
+              min="1"
+              max="168"
+              className="mt-1 block w-32 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm"
+              value={config.pipeline_schedule_hours}
+              onChange={(e) => setConfig({ ...config, pipeline_schedule_hours: Number(e.target.value) })}
+            />
+          </label>
+          {scheduler && (
+            <div className="text-xs text-gray-500 space-y-1">
+              <p>Status: {scheduler.running ? "Running" : "Stopped"}</p>
+              {scheduler.next_run && (
+                <p>Next run: {new Date(scheduler.next_run).toLocaleString()}</p>
+              )}
+            </div>
+          )}
         </div>
       </section>
 

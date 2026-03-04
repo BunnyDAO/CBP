@@ -1,0 +1,23 @@
+services:
+  backend:
+    build: ./Python/GapSignal
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./Data:/Data
+      - ./Python/GapSignal/config.json:/app/config.json
+    environment:
+      - API_KEY=${API_KEY:-}
+      - WEBHOOK_URL=${WEBHOOK_URL:-}
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./Web/GapSignal
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000}
+    ports:
+      - "4321:4321"
+    depends_on:
+      - backend
+    restart: unless-stopped
