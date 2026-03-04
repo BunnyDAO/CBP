@@ -10,3 +10,17 @@ __pycache__/
 Data/**
 !Data/**/
 !Data/**/.gitkeep
+
+# Node
+node_modules/
+
+# Astro / Vite build artifacts
+Web/GapSignal/dist/
+Web/GapSignal/.astro/
+
+# Environment
+.env
+
+# Signal runtime data
+Python/GapSignal/signal_history.csv
+Python/GapSignal/signal_changes.json
