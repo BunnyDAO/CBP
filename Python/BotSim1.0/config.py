@@ -127,3 +127,38 @@ output_folder_default = os.path.join('..', '..', 'Data', 'SOLUSDT-BINANCE', 'Sim
 # I was just using them to debug some issues with monthly rollovers.  Probably best to leave them off.
 CREATE_TRADES_BY_MONTH = False
 CREATE_ANALYSIS_ALL = False
+
+
+# --- Scripted-run override hook ---------------------------------------------
+# Everything above is the hand-edited default config, and running main.py uses it
+# exactly as written.  When the BOTSIM_CONFIG_JSON environment variable points at
+# a JSON file, the settings in that file replace the ones above.  That is how
+# run_sim.py and sweep.py hand a config to a fresh interpreter without anyone
+# editing this file - see sim_config.py for the schema.
+def _load_config_overrides():
+    import json
+    import os as _os
+
+    override_path = _os.environ.get('BOTSIM_CONFIG_JSON')
+    if not override_path:
+        return
+
+    from sim_config import DATE_FIELDS, SimConfig, _parse_date
+
+    with open(override_path, 'r') as f:
+        overrides = json.load(f)
+
+    known = set(SimConfig.field_names())
+    unknown = sorted(set(overrides) - known)
+    if unknown:
+        raise KeyError(
+            f"BOTSIM_CONFIG_JSON ({override_path}) has unknown setting(s): {', '.join(unknown)}")
+
+    for name in DATE_FIELDS:
+        if name in overrides:
+            overrides[name] = _parse_date(overrides[name])
+
+    globals().update(overrides)
+
+
+_load_config_overrides()

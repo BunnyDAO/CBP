@@ -1,0 +1,18 @@
+{
+  "name": "pending-window-and-size",
+  "output_root": "../../../Data/SOLUSDT-BINANCE/Simulations/sweeps/example",
+  "base": {
+    "starting_date": "2022-01-01",
+    "ending_date": "2023-06-30",
+    "ALLOWED_SITUATIONS": ["1v1"],
+    "USE_MIN_PENDING_CANDLES": true,
+    "USE_MAX_PENDING_CANDLES": true
+  },
+  "grid": {
+    "MIN_PENDING_CANDLES": [5, 10, 20],
+    "MAX_PENDING_CANDLES": [48, 96],
+    "position_size_percent": [30, 50, 70]
+  },
+  "sort_by": "return_pct",
+  "sort_desc": true
+}

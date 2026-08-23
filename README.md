@@ -7,6 +7,7 @@ This project is, at least initially, a Backtesting Starter Kit for the Candle Br
 
 ## What's New
 
+- The simulator can now be run from the command line without the menu (`run_sim.py`), and a new `sweep.py` runs a whole grid of configurations in parallel and collects them into one sorted results table. `config.py` still works exactly as before; sweeps layer their overrides on top of it. See the two new sections under BotSim1.0.
 - Downloader script optimized; can now update historical data to current in ~15 seconds if run frequently.
 - New script `historical_instances_finder_updater.py` replaces the previous finder scripts; built with the same incremental approach as the downloader. It checks what instances already exist and scans candles from the last instance forward, adding only what’s new. It detects 1v1s and 1v1+1s, and will upgrade the last instance from the previous run to 1v1+1 if appropriate. It can also run in ~15 seconds if run frequently.
 - Minor tweaks to the simulator code, mostly fixing some bugs in dates shown in reports.
@@ -145,6 +146,10 @@ Brief description of the files:
 - **sim_exits.py** - Contains logic for executing exits during the sim.
 - **position_size.py** - Contains logic for determining the position size of an entry. 
 - **simulation.py** - Contains the main structure of the simulation processing loop.
+- **sim_config.py** - Describes every setting as one injectable object, with validation.  Used by the two scripts below.
+- **run_sim.py** - Runs one simulation from the command line, without the menu.
+- **sweep.py** - Runs many configurations and collects the results into one table.
+- **sweep_metrics.py** - Reads a finished run folder and computes performance metrics.
 
 ### Simulator Features
 
@@ -193,6 +198,93 @@ When you run `main.py`, you will be presented with the following main menu optio
 - **S - Generate a summary report from CSV files**: Generate a summary report directly from the data in a simulation run's output folder.  Useful if you're working on changing the format of the summary report.
 - **P - Prompt for paths**: Prompt for the paths to the instances folder, candle data file, and output folder, in case you want to change paths while the program is running instead of specifying them in config.py.
 - **D - Set start and end dates**: Set the start and end dates for the simulation.  Useful if you launched the program without editing config.py and want to make a change to the dates.
+
+### Running Without the Menu:  `run_sim.py`
+
+`main.py` is still the interactive way in, and nothing about it has changed.  `run_sim.py` is the scriptable equivalent for a single new run:  it takes the settings from `config.py`, applies any overrides you pass on the command line, checks that the result is actually runnable, and runs it.
+
+```sh
+# Simplest form - everything comes from config.py, output goes where you point it
+python run_sim.py --output ../../Data/SOLUSDT-BINANCE/Simulations/MyRun
+
+# Override individual settings without editing config.py
+python run_sim.py --output ...MyRun --set MIN_PENDING_CANDLES=20 --set position_size_percent=50
+
+# Override the paths and dates too
+python run_sim.py --output ...MyRun --candles ...\SOLUSDT_binance_1m.csv --instances ...\SubSet --start 2022-01-01 --end 2023-06-30
+```
+
+Useful options:
+
+- `--set KEY=VALUE` - override one setting; repeat it as many times as you like.  Values are read as JSON, so `--set USE_STATIC_TIME_CAPIT=true` and `--set ALLOWED_SITUATIONS='["1v1","1v1+1"]'` both work.  Setting names are the ones in `config.py`; a typo is reported instead of being silently ignored.
+- `--config FILE.json` - a JSON file of overrides, for when there are too many to type.
+- `--fresh` - clear previous output from the folder first.  The simulator appends to its CSVs, so without this it refuses to run into a folder that already holds results rather than mixing two runs together.
+- `--dry-run` - validate and print the config without running.
+- `--candle-cache DIR` - remember the parsed candle file so later runs skip the CSV parse.
+
+Every run drops a `run_meta.json` in its output folder recording the exact config it used, how long it took, and whether it completed or hit an early termination rule.
+
+Settings are validated before anything starts, so a combination that could never trade (a minimum pending window above the maximum, a leverage cap that allows zero positions, a start date after the end date) is reported straight away instead of after an hour of processing.
+
+### Parameter Sweeps:  `sweep.py`
+
+A sweep runs many configurations and puts the results side by side.  You describe what to vary in a JSON file, and each combination becomes its own simulation in its own folder, several running at once.
+
+```sh
+python sweep.py sweeps/example_sweep.json
+```
+
+The sweep file (see `sweeps/example_sweep.json`):
+
+```json
+{
+  "name": "pending-window-and-size",
+  "output_root": "../../../Data/SOLUSDT-BINANCE/Simulations/sweeps/example",
+  "base": {
+    "starting_date": "2022-01-01",
+    "ending_date": "2023-06-30"
+  },
+  "grid": {
+    "MIN_PENDING_CANDLES": [5, 10, 20],
+    "MAX_PENDING_CANDLES": [48, 96],
+    "position_size_percent": [30, 50, 70]
+  },
+  "sort_by": "return_pct"
+}
+```
+
+- **base** applies to every run in the sweep.
+- **grid** is expanded into every combination of the values listed - the example above is 3 x 2 x 3 = 18 runs.
+- **runs** (optional) is a list of explicit combinations, added on top of the grid or used instead of it.
+- **output_root** is where the run folders go, relative to the sweep file.
+- **sort_by** is the metric the results table is sorted by; `sort_desc` (default true) flips the direction.
+
+Anything you don't mention keeps whatever `config.py` says, so `config.py` is still where you set the candle and instance paths and everything you aren't sweeping.
+
+Options:
+
+- `--workers N` - how many simulations to run at once (default: one per core, minus one).
+- `--dry-run` - print the plan, run nothing.  Worth doing first to see how many runs you just asked for.
+- `--resume` - skip runs that already finished, so an interrupted sweep can be picked up where it left off.
+- `--report-only` - rebuild the results table from folders that already ran.
+
+Combinations that can't produce trades are skipped before anything runs and listed as `invalid` in the results, so a careless grid doesn't quietly waste hours.
+
+The candle file is parsed once up front and cached, rather than by every run.  For a multi-year 1m file that is normally the slowest part of a sweep.
+
+#### Reading the results
+
+`sweep_results.csv` lands in the output root, one row per run, sorted by your chosen metric:  the settings that varied, then final bankroll, return, annualized return, max drawdown (amount, percent and date), a daily Sharpe ratio, trade count, win rate, profit factor, expectancy, average win and loss, fees paid, and whether the run completed or terminated early.  The top of the table is also printed to the terminal when the sweep finishes.
+
+These metrics are computed from the files a run already writes, so `sweep_metrics.py` also works on any single run folder, including old ones:
+
+```sh
+python sweep_metrics.py ../../Data/SOLUSDT-BINANCE/Simulations/MyRun
+```
+
+A word of caution:  a sweep makes it very easy to find the settings that performed best over a given stretch of history, and that is not the same as finding settings that will perform well.  The more combinations you try, the more likely the winner is just the one that fit the noise best.  Treat the top of the table as a shortlist to test on a period you didn't sweep over, not as an answer.
+
+Disk use is worth a thought too:  each run writes a minute-by-minute analysis file, so a long date range times a large grid adds up quickly.
 
 ### Suggested Simulation Naming Scheme
 
